@@ -1,0 +1,174 @@
+- /backend
+    - server.js
+    - .env
+    - /models
+        - User.js
+        - Transaction.js
+    - /routes
+        - auth.js
+        - donations.js
+        - referral.js
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bodyParser = require('body-parser');
+require('dotenv').config();
+
+const authRoutes = require('./routes/auth');
+const donationRoutes = require('./routes/donations');
+const referralRoutes = require('./routes/referral');
+
+const app = express();
+app.use(cors());
+app.use(bodyParser.json());
+
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error(err));
+
+app.use('/api/auth', authRoutes);
+app.use('/api/donations', donationRoutes);
+app.use('/api/referrals', referralRoutes);
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+MONGO_URI=your_mongodb_connection_string
+STRIPE_SECRET_KEY=your_stripe_secret_key
+JWT_SECRET=your_jwt_secret
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+const UserSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, unique: true },
+  password: String,
+  referralCode: String,
+  donations: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }],
+});
+
+UserSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) return next();
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
+module.exports = mongoose.model('User', UserSchema);
+const mongoose = require('mongoose');
+
+const TransactionSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  amount: Number,
+  date: { type: Date, default: Date.now },
+});
+
+module.exports = mongoose.model('Transaction', TransactionSchema);
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const User = require('../models/User');
+const router = express.Router();
+
+router.post('/register', async (req, res) => {
+  const { name, email, password } = req.body;
+  try {
+    const user = new User({ name, email, password, referralCode: generateReferralCode() });
+    await user.save();
+    res.status(201).json({ message: 'User registered' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+  const user = await User.findOne({ email });
+  if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
+
+  const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET);
+  res.json({ token });
+});
+
+function generateReferralCode() {
+  return Math.random().toString(36).substring(2, 8);
+}
+
+module.exports = router;
+const express = require('express');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const Transaction = require('../models/Transaction');
+const router = express.Router();
+
+router.post('/checkout', async (req, res) => {
+  const { amount, userId } = req.body;
+  try {
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{ price_data: { currency: 'usd', product_data: { name: 'Donation' }, unit_amount: amount * 100 }, quantity: 1 }],
+      mode: 'payment',
+      success_url: 'https://yourwebsite.com/success',
+      cancel_url: 'https://yourwebsite.com/cancel',
+    });
+
+    const transaction = new Transaction({ user: userId, amount });
+    await transaction.save();
+    res.json({ url: session.url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+module.exports = router;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fundraising Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="dashboard">
+    <h1>Welcome, <span id="userName"></span>!</h1>
+    <div class="menu">
+      <button onclick="viewDashboard()">Dashboard</button>
+      <button onclick="viewTransactions()">Transactions</button>
+    </div>
+    <div id="content">
+      <h2>Your Referral Code: <span id="referralCode"></span></h2>
+      <button onclick="copyLink()">Copy Donation Link</button>
+      <button onclick="shareOnWhatsApp()">Share on WhatsApp</button>
+    </div>
+  </div>
+
+  <script>
+    function copyLink() {
+      const link = `https://yourwebsite.com/donate?ref=${referralCode}`;
+      navigator.clipboard.writeText(link);
+      alert('Link copied to clipboard!');
+    }
+
+    function shareOnWhatsApp() {
+      const link = `https://yourwebsite.com/donate?ref=${referralCode}`;
+      const message = `Hi, I am raising funds for NayePankh Foundation. Please support me by donating through this link ${link}`;
+      window.open(`https://wa.me/?text=${encodeURIComponent(message)}`);
+    }
+  </script>
+</body>
+</html>
+body {
+  font-family: Arial, sans-serif;
+  background-color: #f0f0f0;
+}
+
+.dashboard {
+  text-align: center;
+  margin-top: 50px;
+}
+
+.menu button {
+  margin: 10px;
+}
